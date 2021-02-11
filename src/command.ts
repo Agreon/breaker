@@ -1,15 +1,8 @@
 import * as ts from "typescript";
-import { Range, window, workspace } from "vscode";
-import {parse} from "editorconfig";
+import { Range, window } from "vscode";
+import { Config, loadEditorConfig } from "./load-editor-config";
 
 export const COMMAND_NAME = "extension.breaker";
-
-/**
- * TODO:
- * - .editorconfig reader?
- *   - tabs or spaces
- *   - indent level
- */
 
 /**
  * Types
@@ -20,17 +13,16 @@ export const COMMAND_NAME = "extension.breaker";
 const findNextParentWithChildrenList = (node: ts.Node): ts.Node | null => {
     // TODO: Extend this list
     switch (node.kind) {
-        // elements
         case ts.SyntaxKind.NamedImports:
             return node;
         // parameters
-        case ts.SyntaxKind.ArrowFunction:
-        case ts.SyntaxKind.FunctionType:
-        case ts.SyntaxKind.FunctionDeclaration:
-            return node;
-        // arguments
-        case ts.SyntaxKind.CallExpression:
-            return node;
+        // case ts.SyntaxKind.ArrowFunction:
+        // case ts.SyntaxKind.FunctionType:
+        // case ts.SyntaxKind.FunctionDeclaration:
+        //     return node;
+        // // arguments
+        // case ts.SyntaxKind.CallExpression:
+        //     return node;
     }
 
     if (node.parent) {
@@ -39,16 +31,27 @@ const findNextParentWithChildrenList = (node: ts.Node): ts.Node | null => {
 
     return null;
 };
-const printer = ts.createPrinter({ newLine: ts.NewLineKind.LineFeed });
 
-const breakNamedImports = (node: ts.NamedImports, context: Context): string => {
-    const result = printer.printNode(ts.EmitHint.Unspecified, node, context.sourceFile);
+const breakNamedImports = (node: ts.NamedImports, { config, sourceFile }: Context): string => {
+    const printer = ts.createPrinter({
+        newLine: config.endOfLine === "lf"
+            ? ts.NewLineKind.LineFeed
+            : ts.NewLineKind.CarriageReturnLineFeed
+    });
+    const result = printer.printNode(ts.EmitHint.Unspecified, node, sourceFile);
 
-    return result
-        .replace(/,/g, ",\n")
-        .replace('{', "{\n")
-        // TODO: Trailing comma support
-        .replace('}', "\n}");
+    const tabCharacter = Array.from(Array(config.indentSize))
+        .map(_i => config.indentStyle === "tab" ? "\t" : " ")
+        .join("");
+
+    const identifiers = result
+        .slice(1, -1)
+        .split(",")
+        .map(id => id.trim())
+        // TODO: Support for no trailing comma
+        .map(id => `${tabCharacter}${id},\n`);
+
+    return `{\n${identifiers.join('')}` + '}';
 };
 
 const breakNode = (node: ts.Node, context: Context): string => {
@@ -60,30 +63,10 @@ const breakNode = (node: ts.Node, context: Context): string => {
     return "";
 };
 
-interface Config {
-    indentStyle: "tab" | "space" | "unset"
-    indentSize: number | "tab" | "unset"
-}
-
 interface Context {
     config: Config
     sourceFile: ts.SourceFile
 }
-
-const loadEditorConfig = async (): Promise<Config> => {
-    try {
-        const cfg = await parse(".editorconfig");
-        return {
-            indentStyle: cfg.indent_style || "space",
-            indentSize: cfg.indent_size || 4
-        };
-    } catch (err) {
-        return {
-            indentStyle: "space",
-            indentSize: 4,
-        };
-    }
-};
 
 export const breakerCommand = async () => {
     const editor = window.activeTextEditor;
@@ -139,12 +122,11 @@ export const breakerCommand = async () => {
                     document.positionAt(parentWithChildList.pos + 1),
                     document.positionAt(parentWithChildList.end)
                 ),
-                breakNode(parentWithChildList, {sourceFile, config})
+                breakNode(parentWithChildList, { sourceFile, config })
             );
         },
-        { undoStopBefore: false, undoStopAfter: false }
     );
 
     // TODO: Make optional
-    await editor.document.save();
+    // await editor.document.save();
 };
